@@ -26,6 +26,8 @@ import (
 )
 
 func TestPipeline(t *testing.T) {
+	creationTime := time.Now()
+
 	pipeline := tb.Pipeline("tomatoes", "foo", tb.PipelineSpec(
 		tb.PipelineDeclaredResource("my-only-git-resource", "git"),
 		tb.PipelineDeclaredResource("my-only-image-resource", "image"),
@@ -41,9 +43,14 @@ func TestPipeline(t *testing.T) {
 		tb.PipelineTask("never-gonna", "give-you-up",
 			tb.RunAfter("foo"),
 		),
-	))
+	),
+		tb.PipelineCreationTimestamp(creationTime),
+	)
 	expectedPipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "tomatoes", Namespace: "foo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tomatoes", Namespace: "foo",
+			CreationTimestamp: metav1.Time{Time: creationTime},
+		},
 		Spec: v1alpha1.PipelineSpec{
 			Resources: []v1alpha1.PipelineDeclaredResource{{
 				Name: "my-only-git-resource",
@@ -89,14 +96,18 @@ func TestPipeline(t *testing.T) {
 
 func TestPipelineRun(t *testing.T) {
 	startTime := time.Now()
+	completedTime := startTime.Add(5 * time.Minute)
+
 	pipelineRun := tb.PipelineRun("pear", "foo", tb.PipelineRunSpec(
 		"tomatoes", tb.PipelineRunServiceAccount("sa"),
 		tb.PipelineRunParam("first-param", "first-value"),
 		tb.PipelineRunTimeout(&metav1.Duration{Duration: 1 * time.Hour}),
 		tb.PipelineRunResourceBinding("some-resource", tb.PipelineResourceBindingRef("my-special-resource")),
-	), tb.PipelineRunStatus(tb.PipelineRunStatusCondition(apis.Condition{
-		Type: apis.ConditionSucceeded,
-	}), tb.PipelineRunStartTime(startTime),
+		tb.PipelineRunServiceAccountTask("foo", "sa-2"),
+	), tb.PipelineRunStatus(tb.PipelineRunStatusCondition(
+		apis.Condition{Type: apis.ConditionSucceeded}),
+		tb.PipelineRunStartTime(startTime),
+		tb.PipelineRunCompletionTime(completedTime),
 	), tb.PipelineRunLabel("label-key", "label-value"))
 	expectedPipelineRun := &v1alpha1.PipelineRun{
 		ObjectMeta: metav1.ObjectMeta{
@@ -107,9 +118,9 @@ func TestPipelineRun(t *testing.T) {
 			},
 		},
 		Spec: v1alpha1.PipelineRunSpec{
-			PipelineRef:    v1alpha1.PipelineRef{Name: "tomatoes"},
-			Trigger:        v1alpha1.PipelineTrigger{Type: v1alpha1.PipelineTriggerTypeManual},
-			ServiceAccount: "sa",
+			PipelineRef:     v1alpha1.PipelineRef{Name: "tomatoes"},
+			ServiceAccount:  "sa",
+			ServiceAccounts: []v1alpha1.PipelineRunSpecServiceAccount{{TaskName: "foo", ServiceAccount: "sa-2"}},
 			Params: []v1alpha1.Param{{
 				Name:  "first-param",
 				Value: "first-value",
@@ -126,7 +137,8 @@ func TestPipelineRun(t *testing.T) {
 			Status: duckv1beta1.Status{
 				Conditions: []apis.Condition{{Type: apis.ConditionSucceeded}},
 			},
-			StartTime: &metav1.Time{Time: startTime},
+			StartTime:      &metav1.Time{Time: startTime},
+			CompletionTime: &metav1.Time{Time: completedTime},
 		},
 	}
 	if d := cmp.Diff(expectedPipelineRun, pipelineRun); d != "" {

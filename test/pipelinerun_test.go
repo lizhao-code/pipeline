@@ -25,6 +25,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tektoncd/pipeline/pkg/artifacts"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/wait"
+
 	"github.com/knative/pkg/apis"
 	knativetest "github.com/knative/pkg/test"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
@@ -124,7 +128,7 @@ func TestPipelineRun(t *testing.T) {
 			td.testSetup(t, c, namespace, i)
 
 			prName := fmt.Sprintf("%s%d", pipelineRunName, i)
-			_, err := c.PipelineRunClient.Create(td.pipelineRunFunc(i, namespace))
+			pipelineRun, err := c.PipelineRunClient.Create(td.pipelineRunFunc(i, namespace))
 			if err != nil {
 				t.Fatalf("Failed to create PipelineRun `%s`: %s", prName, err)
 			}
@@ -159,6 +163,8 @@ func TestPipelineRun(t *testing.T) {
 
 				t.Logf("Checking that labels were propagated correctly for TaskRun %s", r.Name)
 				checkLabelPropagation(t, c, namespace, prName, r)
+				t.Logf("Checking that annotations were propagated correctly for TaskRun %s", r.Name)
+				checkAnnotationPropagation(t, c, namespace, prName, r)
 			}
 
 			matchKinds := map[string][]string{"PipelineRun": {prName}, "TaskRun": expectedTaskRunNames}
@@ -171,6 +177,23 @@ func TestPipelineRun(t *testing.T) {
 			}
 			if len(events) != td.expectedNumberOfEvents {
 				t.Fatalf("Expected %d number of successful events from pipelinerun and taskrun but got %d; list of receieved events : %#v", td.expectedNumberOfEvents, len(events), events)
+			}
+
+			// Wait for up to 10 minutes and restart every second to check if
+			// the PersistentVolumeClaims has the DeletionTimestamp
+			if err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+				// Check to make sure the PipelineRun's artifact storage PVC has been "deleted" at the end of the run.
+				pvc, errWait := c.KubeClient.Kube.CoreV1().PersistentVolumeClaims(namespace).Get(artifacts.GetPVCName(pipelineRun), metav1.GetOptions{})
+				if errWait != nil && !errors.IsNotFound(errWait) {
+					return true, fmt.Errorf("Error looking up PVC %s for PipelineRun %s: %s", artifacts.GetPVCName(pipelineRun), prName, errWait)
+				}
+				// If we are not found then we are okay since it got cleaned up
+				if errors.IsNotFound(errWait) {
+					return true, nil
+				}
+				return pvc.DeletionTimestamp != nil, nil
+			}); err != nil {
+				t.Fatalf("Error while waiting for the PVC to be set as deleted: %s: %s: %s", artifacts.GetPVCName(pipelineRun), err, prName)
 			}
 			t.Logf("Successfully finished test %q", td.name)
 		})
@@ -329,12 +352,6 @@ func getName(namespace string, suffix int) string {
 	return fmt.Sprintf("%s%d", namespace, suffix)
 }
 
-func newHostPathType(pathType string) *corev1.HostPathType {
-	hostPathType := new(corev1.HostPathType)
-	*hostPathType = corev1.HostPathType(pathType)
-	return hostPathType
-}
-
 // collectMatchingEvents collects list of events under 5 seconds that match
 // 1. matchKinds which is a map of Kind of Object with name of objects
 // 2. reason which is the expected reason of event
@@ -421,6 +438,45 @@ func checkLabelPropagation(t *testing.T, c *clients, namespace string, pipelineR
 	}
 }
 
+// checkAnnotationPropagation checks that annotations are correctly propagating from
+// Pipelines, PipelineRuns, and Tasks to TaskRuns and Pods.
+func checkAnnotationPropagation(t *testing.T, c *clients, namespace string, pipelineRunName string, tr *v1alpha1.TaskRun) {
+	annotations := make(map[string]string)
+
+	// Check annotation propagation to PipelineRuns.
+	pr, err := c.PipelineRunClient.Get(pipelineRunName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Couldn't get expected PipelineRun for %s: %s", tr.Name, err)
+	}
+	p, err := c.PipelineClient.Get(pr.Spec.PipelineRef.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Couldn't get expected Pipeline for %s: %s", pr.Name, err)
+	}
+	for key, val := range p.ObjectMeta.Annotations {
+		annotations[key] = val
+	}
+	assertAnnotationsMatch(t, annotations, pr.ObjectMeta.Annotations)
+
+	// Check annotation propagation to TaskRuns.
+	for key, val := range pr.ObjectMeta.Annotations {
+		annotations[key] = val
+	}
+	if tr.Spec.TaskRef != nil {
+		task, err := c.TaskClient.Get(tr.Spec.TaskRef.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("Couldn't get expected Task for %s: %s", tr.Name, err)
+		}
+		for key, val := range task.ObjectMeta.Annotations {
+			annotations[key] = val
+		}
+	}
+	assertAnnotationsMatch(t, annotations, tr.ObjectMeta.Annotations)
+
+	// Check annotation propagation to Pods.
+	pod := getPodForTaskRun(t, c.KubeClient, namespace, tr)
+	assertAnnotationsMatch(t, annotations, pod.ObjectMeta.Annotations)
+}
+
 func getPodForTaskRun(t *testing.T, kubeClient *knativetest.KubeClient, namespace string, tr *v1alpha1.TaskRun) *corev1.Pod {
 	// The Pod name has a random suffix, so we filter by label to find the one we care about.
 	pods, err := kubeClient.Kube.CoreV1().Pods(namespace).List(metav1.ListOptions{
@@ -439,6 +495,14 @@ func assertLabelsMatch(t *testing.T, expectedLabels, actualLabels map[string]str
 	for key, expectedVal := range expectedLabels {
 		if actualVal := actualLabels[key]; actualVal != expectedVal {
 			t.Errorf("Expected labels containing %s=%s but labels were %v", key, expectedVal, actualLabels)
+		}
+	}
+}
+
+func assertAnnotationsMatch(t *testing.T, expectedAnnotations, actualAnnotations map[string]string) {
+	for key, expectedVal := range expectedAnnotations {
+		if actualVal := actualAnnotations[key]; actualVal != expectedVal {
+			t.Errorf("Expected annotations containing %s=%s but annotations were %v", key, expectedVal, actualAnnotations)
 		}
 	}
 }

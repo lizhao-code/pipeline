@@ -9,7 +9,7 @@ required = [
   "k8s.io/code-generator/cmd/lister-gen",
   "k8s.io/code-generator/cmd/informer-gen",
   "github.com/knative/caching/pkg/apis/caching",
-  "github.com/knative/test-infra/scripts",
+  "github.com/tektoncd/plumbing/scripts",
   "github.com/knative/test-infra/tools/dep-collector",
 ]
 
@@ -60,12 +60,22 @@ required = [
 
 [[override]]
   name = "github.com/knative/pkg"
-  # HEAD as of 2019-04-09 💖
-  revision = "28cfa161499b88cc5a71cfb7cf8a59fc34bff3d3"
+  # HEAD as of 2019-06-14 💖
+  revision = "68737b1b4e03d9a888e89ee2a44714a56eefd539"
 
 [[override]]
   name = "go.uber.org/zap"
   revision = "67bc79d13d155c02fd008f721863ff8cc5f30659"
+
+[[override]]
+  name = "contrib.go.opencensus.io/exporter/stackdriver"
+  # HEAD as of 2019-02-11
+  # Needed because this includes a fix to support Stackdriver built-in metrics
+  revision = "c06c82c832edca4eaf7b0241bd655560a1be0346"
+
+[[override]]
+  name = "k8s.io/apiextensions-apiserver"
+  version = "kubernetes-1.12.6"
 
 [prune]
   go-tests = true
@@ -83,5 +93,5 @@ required = [
   non-go = false
 
 [[prune.project]]
-  name = "github.com/knative/test-infra"
+  name = "github.com/tektoncd/plumbing"
   non-go = false

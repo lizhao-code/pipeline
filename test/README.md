@@ -120,9 +120,9 @@ Environment variables used by end to end tests:
 - In GCS taskrun test, GCP service account JSON key file at path
   `GCP_SERVICE_ACCOUNT_KEY_PATH`, if present, is used to generate Kubernetes
   secret to access GCS bucket.
-- In Storage artifact bucket test, the `GCP_SERVICE_ACCOUNT_KEY_PATH`
-  JSON key is used to create/delete a bucket which will be used for output to
-  input linking by the `PipelineRun` controller.
+- In Storage artifact bucket test, the `GCP_SERVICE_ACCOUNT_KEY_PATH` JSON key
+  is used to create/delete a bucket which will be used for output to input
+  linking by the `PipelineRun` controller.
 
 To create a service account usable in the e2e tests:
 
@@ -181,18 +181,18 @@ against, i.e. override
 go test -v -tags=e2e -count=1 ./test --kubeconfig ~/special/kubeconfig --cluster myspecialcluster
 ```
 
-Tests importing
-[`github.com/knative/build-pipline/test`](#adding-integration-tests) recognize
-the
+Tests importing [`github.com/tektoncd/pipeline/test`](#adding-integration-tests)
+recognize the
 [flags added by `knative/pkg/test`](https://github.com/knative/pkg/tree/master/test#flags).
 
-### One test case
+### Running specific test cases
 
-To run one e2e test case, e.g. TestTaskRun, use
+To run all the test cases with their names starting with the same letters, e.g.
+TestTaskRun, use
 [the `-run` flag with `go test`](https://golang.org/cmd/go/#hdr-Testing_flags):
 
 ```bash
-go test -v -tags=e2e -count=1 ./test -run ^TestTaskRun$
+go test -v -tags=e2e -count=1 ./test -run ^TestTaskRun
 ```
 
 ### Running YAML tests
@@ -349,7 +349,7 @@ test/presubmit-tests.sh --unit-tests
 ```
 
 Prow is configured in
-[the knative `config.yaml` in `knative/test-infra`](https://github.com/knative/test-infra/blob/master/ci/prow/config.yaml)
+[the knative `config.yaml` in `tektoncd/plumbing`](https://github.com/tektoncd/plumbing/blob/master/ci/prow/config.yaml)
 via the sections for `tektoncd/pipeline`.
 
 ### Running presubmit integration tests
@@ -361,9 +361,9 @@ The presubmit integration tests entrypoint will run:
 
 When run using Prow, integration tests will try to get a new cluster using
 [boskos](https://github.com/kubernetes/test-infra/tree/master/boskos) and
-[these hardcoded GKE projects](https://github.com/knative/test-infra/blob/master/ci/prow/boskos/resources.yaml#L15),
+[these hardcoded GKE projects](https://github.com/tektoncd/plumbing/blob/master/ci/prow/boskos/resources.yaml#L15),
 which only
-[the `knative/test-infra` OWNERS](https://github.com/knative/test-infra/blob/master/OWNERS)
+[the `tektoncd/plumbing` OWNERS](https://github.com/tektoncd/plumbing/blob/master/OWNERS)
 have access to.
 
 If you would like to run the integration tests against your cluster, you can use

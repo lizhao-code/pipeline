@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/knative/pkg/apis"
@@ -32,7 +33,10 @@ import (
 	"github.com/tektoncd/pipeline/pkg/reconciler"
 	"github.com/tektoncd/pipeline/pkg/reconciler/v1alpha1/taskrun/entrypoint"
 	"github.com/tektoncd/pipeline/pkg/reconciler/v1alpha1/taskrun/resources"
+	"github.com/tektoncd/pipeline/pkg/reconciler/v1alpha1/taskrun/sidecars"
+	"github.com/tektoncd/pipeline/pkg/status"
 	"go.uber.org/zap"
+	"golang.org/x/xerrors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -43,29 +47,14 @@ import (
 )
 
 const (
-	// reasonCouldntGetTask indicates that the reason for the failure status is that the
-	// Task couldn't be found
-	reasonCouldntGetTask = "CouldntGetTask"
-
-	// reasonFailedResolution indicated that the reason for failure status is
-	// that references within the TaskRun could not be resolved
-	reasonFailedResolution = "TaskRunResolutionFailed"
-
-	// reasonFailedValidation indicated that the reason for failure status is
-	// that taskrun failed runtime validation
-	reasonFailedValidation = "TaskRunValidationFailed"
-
-	// reasonRunning indicates that the reason for the inprogress status is that the TaskRun
-	// is just starting to be reconciled
-	reasonRunning = "Running"
-
-	// reasonTimedOut indicates that the TaskRun has taken longer than its configured timeout
-	reasonTimedOut = "TaskRunTimeout"
-
 	// taskRunAgentName defines logging agent name for TaskRun Controller
 	taskRunAgentName = "taskrun-controller"
 	// taskRunControllerName defines name for TaskRun Controller
 	taskRunControllerName = "TaskRun"
+
+	// imageDigestExporterContainerName defines the name of the container that will collect the
+	// built images digest
+	imageDigestExporterContainerName = "step-image-digest-exporter"
 )
 
 // Reconciler implements controller.Reconciler for Configuration resources.
@@ -105,7 +94,7 @@ func NewController(
 		resourceLister:    resourceInformer.Lister(),
 		timeoutHandler:    timeoutHandler,
 	}
-	impl := controller.NewImpl(c, c.Logger, taskRunControllerName, reconciler.MustNewStatsReporter(taskRunControllerName, c.Logger))
+	impl := controller.NewImpl(c, c.Logger, taskRunControllerName)
 
 	c.Logger.Info("Setting up event handlers")
 	taskRunInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -157,10 +146,24 @@ func (c *Reconciler) Reconcile(ctx context.Context, key string) error {
 	// If the TaskRun is just starting, this will also set the starttime,
 	// from which the timeout will immediately begin counting down.
 	tr.Status.InitializeConditions()
+	// In case node time was not synchronized, when controller has been scheduled to other nodes.
+	if tr.Status.StartTime.Sub(tr.CreationTimestamp.Time) < 0 {
+		c.Logger.Warnf("TaskRun %s createTimestamp %s is after the taskRun started %s", tr.GetRunKey(), tr.CreationTimestamp, tr.Status.StartTime)
+		tr.Status.StartTime = &tr.CreationTimestamp
+	}
 
 	if tr.IsDone() {
 		c.timeoutHandler.Release(tr)
-		return nil
+		pod, err := c.KubeClientSet.CoreV1().Pods(tr.Namespace).Get(tr.Status.PodName, metav1.GetOptions{})
+		if err == nil {
+			err = sidecars.Stop(pod, c.KubeClientSet.CoreV1().Pods(tr.Namespace).Update)
+		} else if errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			c.Logger.Errorf("Error stopping sidecars for TaskRun %q: %v", name, err)
+		}
+		return err
 	}
 
 	// Reconcile this copy of the task run and then write back any status
@@ -179,10 +182,10 @@ func (c *Reconciler) Reconcile(ctx context.Context, key string) error {
 		return err
 	}
 	// Since we are using the status subresource, it is not possible to update
-	// the status and labels simultaneously.
+	// the status and labels/annotations simultaneously.
 	if !reflect.DeepEqual(original.ObjectMeta.Labels, tr.ObjectMeta.Labels) {
-		if _, err := c.updateLabels(tr); err != nil {
-			c.Logger.Warn("Failed to update TaskRun labels", zap.Error(err))
+		if _, err := c.updateLabelsAndAnnotations(tr); err != nil {
+			c.Logger.Warn("Failed to update TaskRun labels/annotations", zap.Error(err))
 			return err
 		}
 	}
@@ -229,7 +232,7 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		tr.Status.SetCondition(&apis.Condition{
 			Type:    apis.ConditionSucceeded,
 			Status:  corev1.ConditionFalse,
-			Reason:  reasonFailedResolution,
+			Reason:  status.ReasonFailedResolution,
 			Message: err.Error(),
 		})
 		return nil
@@ -246,6 +249,14 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		tr.ObjectMeta.Labels[pipeline.GroupName+pipeline.TaskLabelKey] = taskMeta.Name
 	}
 
+	// Propagate annotations from Task to TaskRun.
+	if tr.ObjectMeta.Annotations == nil {
+		tr.ObjectMeta.Annotations = make(map[string]string, len(taskMeta.Annotations))
+	}
+	for key, value := range taskMeta.Annotations {
+		tr.ObjectMeta.Annotations[key] = value
+	}
+
 	// Check if the TaskRun has timed out; if it is, this will set its status
 	// accordingly.
 	if timedOut, err := c.checkTimeout(tr, taskSpec, c.KubeClientSet.CoreV1().Pods(tr.Namespace).Delete); err != nil {
@@ -260,7 +271,7 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		tr.Status.SetCondition(&apis.Condition{
 			Type:    apis.ConditionSucceeded,
 			Status:  corev1.ConditionFalse,
-			Reason:  reasonFailedResolution,
+			Reason:  status.ReasonFailedResolution,
 			Message: err.Error(),
 		})
 		return nil
@@ -271,7 +282,7 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		tr.Status.SetCondition(&apis.Condition{
 			Type:    apis.ConditionSucceeded,
 			Status:  corev1.ConditionFalse,
-			Reason:  reasonFailedValidation,
+			Reason:  status.ReasonFailedValidation,
 			Message: err.Error(),
 		})
 		return nil
@@ -284,24 +295,9 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		return err
 	}
 	if pod == nil {
-		// Pod is not present, create pod.
-		pod, err = c.createPod(tr, rtr.TaskSpec, rtr.TaskName)
+		pod, err = c.createPod(tr, rtr)
 		if err != nil {
-			// This Run has failed, so we need to mark it as failed and stop reconciling it
-			var msg string
-			if tr.Spec.TaskRef != nil {
-				msg = fmt.Sprintf("References a Task %s that doesn't exist: ", fmt.Sprintf("%s/%s", tr.Namespace, tr.Spec.TaskRef.Name))
-			} else {
-				msg = fmt.Sprintf("References a TaskSpec with missing information: ")
-			}
-			tr.Status.SetCondition(&apis.Condition{
-				Type:    apis.ConditionSucceeded,
-				Status:  corev1.ConditionFalse,
-				Reason:  reasonCouldntGetTask,
-				Message: fmt.Sprintf("%s %v", msg, err),
-			})
-			c.Recorder.Eventf(tr, corev1.EventTypeWarning, "BuildCreationFailed", "Failed to create build pod %q: %v", tr.Name, err)
-			c.Logger.Errorf("Failed to create build pod for task %q :%v", err, tr.Name)
+			c.handlePodCreationError(tr, err)
 			return nil
 		}
 		go c.timeoutHandler.WaitTaskRun(tr, tr.Status.StartTime)
@@ -311,11 +307,25 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 		return err
 	}
 
+	if status.IsPodExceedingNodeResources(pod) {
+		c.Recorder.Eventf(tr, corev1.EventTypeWarning, status.ReasonExceededNodeResources, "Insufficient resources to schedule pod %q", pod.Name)
+	}
+
 	before := tr.Status.GetCondition(apis.ConditionSucceeded)
 
-	updateStatusFromPod(tr, pod)
+	addReady := status.UpdateStatusFromPod(tr, pod, c.resourceLister, c.KubeClientSet, c.Logger)
+
+	status.SortTaskRunStepOrder(tr.Status.Steps, taskSpec.Steps)
+
+	updateTaskRunResourceResult(tr, pod, c.resourceLister, c.KubeClientSet, c.Logger)
 
 	after := tr.Status.GetCondition(apis.ConditionSucceeded)
+
+	if addReady {
+		if err := c.updateReady(pod); err != nil {
+			return err
+		}
+	}
 
 	reconciler.EmitEvent(c.Recorder, before, after, tr)
 
@@ -324,110 +334,58 @@ func (c *Reconciler) reconcile(ctx context.Context, tr *v1alpha1.TaskRun) error 
 	return nil
 }
 
-func updateStatusFromPod(taskRun *v1alpha1.TaskRun, pod *corev1.Pod) {
-	if taskRun.Status.GetCondition(apis.ConditionSucceeded) == nil || taskRun.Status.GetCondition(apis.ConditionSucceeded).Status == corev1.ConditionUnknown {
-		// If the taskRunStatus doesn't exist yet, it's because we just started running
-		taskRun.Status.SetCondition(&apis.Condition{
-			Type:    apis.ConditionSucceeded,
-			Status:  corev1.ConditionUnknown,
-			Reason:  reasonRunning,
-			Message: reasonRunning,
-		})
+func (c *Reconciler) handlePodCreationError(tr *v1alpha1.TaskRun, err error) {
+	var reason, msg string
+	var succeededStatus corev1.ConditionStatus
+	if isExceededResourceQuotaError(err) {
+		succeededStatus = corev1.ConditionUnknown
+		reason = status.ReasonExceededResourceQuota
+		backoff, currentlyBackingOff := c.timeoutHandler.GetBackoff(tr)
+		if !currentlyBackingOff {
+			go c.timeoutHandler.SetTaskRunTimer(tr, time.Until(backoff.NextAttempt))
+		}
+		msg = fmt.Sprintf("%s, reattempted %d times", status.GetExceededResourcesMessage(tr), backoff.NumAttempts)
+	} else {
+		succeededStatus = corev1.ConditionFalse
+		reason = status.ReasonCouldntGetTask
+		if tr.Spec.TaskRef != nil {
+			msg = fmt.Sprintf("Missing or invalid Task %s/%s", tr.Namespace, tr.Spec.TaskRef.Name)
+		} else {
+			msg = fmt.Sprintf("Invalid TaskSpec")
+		}
 	}
-
-	taskRun.Status.PodName = pod.Name
-
-	taskRun.Status.Steps = []v1alpha1.StepState{}
-	for _, s := range pod.Status.ContainerStatuses {
-		taskRun.Status.Steps = append(taskRun.Status.Steps, v1alpha1.StepState{
-			ContainerState: *s.State.DeepCopy(),
-			Name:           resources.TrimContainerNamePrefix(s.Name),
-		})
-	}
-
-	switch pod.Status.Phase {
-	case corev1.PodRunning:
-		taskRun.Status.SetCondition(&apis.Condition{
-			Type:   apis.ConditionSucceeded,
-			Status: corev1.ConditionUnknown,
-			Reason: "Building",
-		})
-	case corev1.PodFailed:
-		msg := getFailureMessage(pod)
-		taskRun.Status.SetCondition(&apis.Condition{
-			Type:    apis.ConditionSucceeded,
-			Status:  corev1.ConditionFalse,
-			Message: msg,
-		})
-		// update tr completed time
-		taskRun.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	case corev1.PodPending:
-		msg := getWaitingMessage(pod)
-		taskRun.Status.SetCondition(&apis.Condition{
-			Type:    apis.ConditionSucceeded,
-			Status:  corev1.ConditionUnknown,
-			Reason:  "Pending",
-			Message: msg,
-		})
-	case corev1.PodSucceeded:
-		taskRun.Status.SetCondition(&apis.Condition{
-			Type:   apis.ConditionSucceeded,
-			Status: corev1.ConditionTrue,
-		})
-		// update tr completed time
-		taskRun.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-	}
+	tr.Status.SetCondition(&apis.Condition{
+		Type:    apis.ConditionSucceeded,
+		Status:  succeededStatus,
+		Reason:  reason,
+		Message: fmt.Sprintf("%s: %v", msg, err),
+	})
+	c.Recorder.Eventf(tr, corev1.EventTypeWarning, "BuildCreationFailed", "Failed to create build pod %q: %v", tr.Name, err)
+	c.Logger.Errorf("Failed to create build pod for task %q: %v", tr.Name, err)
 }
 
-func getWaitingMessage(pod *corev1.Pod) string {
-	// First, try to surface reason for pending/unknown about the actual build step.
-	for _, status := range pod.Status.ContainerStatuses {
-		wait := status.State.Waiting
-		if wait != nil && wait.Message != "" {
-			return fmt.Sprintf("build step %q is pending with reason %q",
-				status.Name, wait.Message)
+func updateTaskRunResourceResult(taskRun *v1alpha1.TaskRun, pod *corev1.Pod, resourceLister listers.PipelineResourceLister, kubeclient kubernetes.Interface, logger *zap.SugaredLogger) {
+	if resources.TaskRunHasOutputImageResource(resourceLister.PipelineResources(taskRun.Namespace).Get, taskRun) && taskRun.IsSuccessful() {
+		for _, container := range pod.Spec.Containers {
+			if strings.HasPrefix(container.Name, imageDigestExporterContainerName) {
+				req := kubeclient.CoreV1().Pods(taskRun.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: container.Name})
+				logContent, err := req.Do().Raw()
+				if err != nil {
+					logger.Errorf("Error getting output from image-digest-exporter for %s/%s: %s", taskRun.Name, taskRun.Namespace, err)
+				}
+				err = resources.UpdateTaskRunStatusWithResourceResult(taskRun, logContent)
+				if err != nil {
+					logger.Errorf("Error getting output from image-digest-exporter for %s/%s: %s", taskRun.Name, taskRun.Namespace, err)
+				}
+			}
 		}
 	}
-	// Try to surface underlying reason by inspecting pod's recent status if condition is not true
-	for i, podStatus := range pod.Status.Conditions {
-		if podStatus.Status != corev1.ConditionTrue {
-			return fmt.Sprintf("pod status %q:%q; message: %q",
-				pod.Status.Conditions[i].Type,
-				pod.Status.Conditions[i].Status,
-				pod.Status.Conditions[i].Message)
-		}
-	}
-	// Next, return the Pod's status message if it has one.
-	if pod.Status.Message != "" {
-		return pod.Status.Message
-	}
-
-	// Lastly fall back on a generic pending message.
-	return "Pending"
-}
-
-func getFailureMessage(pod *corev1.Pod) string {
-	// First, try to surface an error about the actual build step that failed.
-	for _, status := range pod.Status.ContainerStatuses {
-		term := status.State.Terminated
-		if term != nil && term.ExitCode != 0 {
-			return fmt.Sprintf("%q exited with code %d (image: %q); for logs run: kubectl -n %s logs %s -c %s",
-				status.Name, term.ExitCode, status.ImageID,
-				pod.Namespace, pod.Name, status.Name)
-		}
-	}
-	// Next, return the Pod's status message if it has one.
-	if pod.Status.Message != "" {
-		return pod.Status.Message
-	}
-	// Lastly fall back on a generic error message.
-	return "build failed for unspecified reasons."
 }
 
 func (c *Reconciler) updateStatus(taskrun *v1alpha1.TaskRun) (*v1alpha1.TaskRun, error) {
 	newtaskrun, err := c.taskRunLister.TaskRuns(taskrun.Namespace).Get(taskrun.Name)
 	if err != nil {
-		return nil, fmt.Errorf("Error getting TaskRun %s when updating status: %s", taskrun.Name, err)
+		return nil, xerrors.Errorf("Error getting TaskRun %s when updating status: %w", taskrun.Name, err)
 	}
 	if !reflect.DeepEqual(taskrun.Status, newtaskrun.Status) {
 		newtaskrun.Status = taskrun.Status
@@ -436,29 +394,66 @@ func (c *Reconciler) updateStatus(taskrun *v1alpha1.TaskRun) (*v1alpha1.TaskRun,
 	return newtaskrun, nil
 }
 
-func (c *Reconciler) updateLabels(tr *v1alpha1.TaskRun) (*v1alpha1.TaskRun, error) {
+func (c *Reconciler) updateLabelsAndAnnotations(tr *v1alpha1.TaskRun) (*v1alpha1.TaskRun, error) {
 	newTr, err := c.taskRunLister.TaskRuns(tr.Namespace).Get(tr.Name)
 	if err != nil {
-		return nil, fmt.Errorf("Error getting TaskRun %s when updating labels: %s", tr.Name, err)
+		return nil, xerrors.Errorf("Error getting TaskRun %s when updating labels/annotations: %w", tr.Name, err)
 	}
-	if !reflect.DeepEqual(tr.ObjectMeta.Labels, newTr.ObjectMeta.Labels) {
+	if !reflect.DeepEqual(tr.ObjectMeta.Labels, newTr.ObjectMeta.Labels) || !reflect.DeepEqual(tr.ObjectMeta.Annotations, newTr.ObjectMeta.Annotations) {
 		newTr.ObjectMeta.Labels = tr.ObjectMeta.Labels
+		newTr.ObjectMeta.Annotations = tr.ObjectMeta.Annotations
 		return c.PipelineClientSet.TektonV1alpha1().TaskRuns(tr.Namespace).Update(newTr)
 	}
 	return newTr, nil
 }
 
-// createPod creates a Pod based on the Task's configuration, with pvcName as a
-// volumeMount
-func (c *Reconciler) createPod(tr *v1alpha1.TaskRun, ts *v1alpha1.TaskSpec, taskName string) (*corev1.Pod, error) {
-	ts = ts.DeepCopy()
-	ts, err := resources.AddInputResource(c.KubeClientSet, taskName, ts, tr, c.resourceLister, c.Logger)
+// updateReady updates a Pod to include the "ready" annotation, which will be projected by
+// the Downward API into a volume mounted by the entrypoint container. This will signal to
+// the entrypoint that the TaskRun can proceed.
+func (c *Reconciler) updateReady(pod *corev1.Pod) error {
+	newPod, err := c.KubeClientSet.CoreV1().Pods(pod.Namespace).Get(pod.Name, metav1.GetOptions{})
+	if err != nil {
+		return xerrors.Errorf("Error getting Pod %q when updating ready annotation: %w", pod.Name, err)
+	}
+	updatePod := c.KubeClientSet.CoreV1().Pods(newPod.Namespace).Update
+	if err := resources.AddReadyAnnotation(newPod, updatePod); err != nil {
+		c.Logger.Errorf("Failed to update ready annotation for pod %q for taskrun %q: %v", pod.Name, pod.Name, err)
+		return xerrors.Errorf("Error adding ready annotation to Pod %q: %w", pod.Name, err)
+	}
+
+	return nil
+}
+
+// createPod creates a Pod based on the Task's configuration, with pvcName as a volumeMount
+// TODO(dibyom): Refactor resource setup/templating logic to its own function in the resources package
+func (c *Reconciler) createPod(tr *v1alpha1.TaskRun, rtr *resources.ResolvedTaskResources) (*corev1.Pod, error) {
+	ts := rtr.TaskSpec.DeepCopy()
+	inputResources, err := resourceImplBinding(rtr.Inputs)
+	if err != nil {
+		c.Logger.Errorf("Failed to initialize input resources: %v", err)
+		return nil, err
+	}
+	outputResources, err := resourceImplBinding(rtr.Outputs)
+	if err != nil {
+		c.Logger.Errorf("Failed to initialize output resources: %v", err)
+		return nil, err
+	}
+
+	// Get actual resource
+
+	err = resources.AddOutputImageDigestExporter(tr, ts, c.resourceLister.PipelineResources(tr.Namespace).Get)
+	if err != nil {
+		c.Logger.Errorf("Failed to create a build for taskrun: %s due to output image resource error %v", tr.Name, err)
+		return nil, err
+	}
+
+	ts, err = resources.AddInputResource(c.KubeClientSet, rtr.TaskName, ts, tr, inputResources, c.Logger)
 	if err != nil {
 		c.Logger.Errorf("Failed to create a build for taskrun: %s due to input resource error %v", tr.Name, err)
 		return nil, err
 	}
 
-	err = resources.AddOutputResources(c.KubeClientSet, taskName, ts, tr, c.resourceLister, c.Logger)
+	ts, err = resources.AddOutputResources(c.KubeClientSet, rtr.TaskName, ts, tr, outputResources, c.Logger)
 	if err != nil {
 		c.Logger.Errorf("Failed to create a build for taskrun: %s due to output resource error %v", tr.Name, err)
 		return nil, err
@@ -466,7 +461,7 @@ func (c *Reconciler) createPod(tr *v1alpha1.TaskRun, ts *v1alpha1.TaskSpec, task
 
 	ts, err = createRedirectedTaskSpec(c.KubeClientSet, ts, tr, c.cache, c.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't create redirected TaskSpec: %v", err)
+		return nil, xerrors.Errorf("couldn't create redirected TaskSpec: %w", err)
 	}
 
 	var defaults []v1alpha1.TaskParam
@@ -477,18 +472,12 @@ func (c *Reconciler) createPod(tr *v1alpha1.TaskRun, ts *v1alpha1.TaskSpec, task
 	ts = resources.ApplyParameters(ts, tr, defaults...)
 
 	// Apply bound resource templating from the taskrun.
-	ts, err = resources.ApplyResources(ts, tr.Spec.Inputs.Resources, c.resourceLister.PipelineResources(tr.Namespace).Get, "inputs")
-	if err != nil {
-		return nil, fmt.Errorf("couldnt apply input resource templating: %s", err)
-	}
-	ts, err = resources.ApplyResources(ts, tr.Spec.Outputs.Resources, c.resourceLister.PipelineResources(tr.Namespace).Get, "outputs")
-	if err != nil {
-		return nil, fmt.Errorf("couldnt apply output resource templating: %s", err)
-	}
+	ts = resources.ApplyResources(ts, inputResources, "inputs")
+	ts = resources.ApplyResources(ts, outputResources, "outputs")
 
 	pod, err := resources.MakePod(tr, *ts, c.KubeClientSet, c.cache, c.Logger)
 	if err != nil {
-		return nil, fmt.Errorf("translating Build to Pod: %v", err)
+		return nil, xerrors.Errorf("translating Build to Pod: %w", err)
 	}
 
 	return c.KubeClientSet.CoreV1().Pods(tr.Namespace).Create(pod)
@@ -503,7 +492,7 @@ func createRedirectedTaskSpec(kubeclient kubernetes.Interface, ts *v1alpha1.Task
 	// entrypoint which copies logs to the volume
 	err := entrypoint.RedirectSteps(cache, ts.Steps, kubeclient, tr, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add entrypoint to steps of TaskRun %s: %v", tr.Name, err)
+		return nil, xerrors.Errorf("failed to add entrypoint to steps of TaskRun %s: %w", tr.Name, err)
 	}
 	// Add the step which will copy the entrypoint into the volume
 	// we are going to be using, so that all of the steps will have
@@ -519,6 +508,23 @@ func createRedirectedTaskSpec(kubeclient kubernetes.Interface, ts *v1alpha1.Task
 			EmptyDir: &corev1.EmptyDirVolumeSource{},
 		},
 	})
+
+	ts.Volumes = append(ts.Volumes, corev1.Volume{
+		Name: entrypoint.DownwardMountName,
+		VolumeSource: corev1.VolumeSource{
+			DownwardAPI: &corev1.DownwardAPIVolumeSource{
+				Items: []corev1.DownwardAPIVolumeFile{
+					corev1.DownwardAPIVolumeFile{
+						Path: entrypoint.DownwardMountReadyFile,
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: fmt.Sprintf("metadata.annotations['%s']", resources.ReadyAnnotation),
+						},
+					},
+				},
+			},
+		},
+	})
+
 	return ts, nil
 }
 
@@ -530,30 +536,49 @@ func (c *Reconciler) checkTimeout(tr *v1alpha1.TaskRun, ts *v1alpha1.TaskSpec, d
 		return false, nil
 	}
 
-	if tr.Spec.Timeout != nil {
-		timeout := tr.Spec.Timeout.Duration
-		runtime := time.Since(tr.Status.StartTime.Time)
-
-		c.Logger.Infof("Checking timeout for TaskRun %q (startTime %s, timeout %s, runtime %s)", tr.Name, tr.Status.StartTime, timeout, runtime)
-		if runtime > timeout {
-			c.Logger.Infof("TaskRun %q is timeout (runtime %s over %s), deleting pod", tr.Name, runtime, timeout)
+	timeout := reconciler.GetTimeout(tr.Spec.Timeout)
+	runtime := time.Since(tr.Status.StartTime.Time)
+	c.Logger.Infof("Checking timeout for TaskRun %q (startTime %s, timeout %s, runtime %s)", tr.Name, tr.Status.StartTime, timeout, runtime)
+	if runtime > timeout {
+		c.Logger.Infof("TaskRun %q is timeout (runtime %s over %s), deleting pod", tr.Name, runtime, timeout)
+		// tr.Status.PodName will be empty if the pod was never successfully created. This condition
+		// can be reached, for example, by the pod never being schedulable due to limits imposed by
+		// a namespace's ResourceQuota.
+		if tr.Status.PodName != "" {
 			if err := dp(tr.Status.PodName, &metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
 				c.Logger.Errorf("Failed to terminate pod: %v", err)
 				return true, err
 			}
-
-			timeoutMsg := fmt.Sprintf("TaskRun %q failed to finish within %q", tr.Name, timeout.String())
-			tr.Status.SetCondition(&apis.Condition{
-				Type:    apis.ConditionSucceeded,
-				Status:  corev1.ConditionFalse,
-				Reason:  reasonTimedOut,
-				Message: timeoutMsg,
-			})
-			// update tr completed time
-			tr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
-
-			return true, nil
 		}
+
+		timeoutMsg := fmt.Sprintf("TaskRun %q failed to finish within %q", tr.Name, timeout.String())
+		tr.Status.SetCondition(&apis.Condition{
+			Type:    apis.ConditionSucceeded,
+			Status:  corev1.ConditionFalse,
+			Reason:  status.ReasonTimedOut,
+			Message: timeoutMsg,
+		})
+		// update tr completed time
+		tr.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+
+		return true, nil
 	}
 	return false, nil
+}
+
+func isExceededResourceQuotaError(err error) bool {
+	return err != nil && errors.IsForbidden(err) && strings.Contains(err.Error(), "exceeded quota")
+}
+
+// resourceImplBinding maps pipeline resource names to the actual resource type implementations
+func resourceImplBinding(resources map[string]*v1alpha1.PipelineResource) (map[string]v1alpha1.PipelineResourceInterface, error) {
+	p := make(map[string]v1alpha1.PipelineResourceInterface)
+	for rName, r := range resources {
+		i, err := v1alpha1.ResourceFromType(r)
+		if err != nil {
+			return nil, xerrors.Errorf("failed to create resource %s : %v with error: %w", rName, r, err)
+		}
+		p[rName] = i
+	}
+	return p, nil
 }

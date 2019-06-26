@@ -33,7 +33,8 @@ var (
 // ArtifactPVC represents the pvc created by the pipelinerun
 // for artifacts temporary storage
 type ArtifactPVC struct {
-	Name string
+	Name                  string
+	PersistentVolumeClaim *corev1.PersistentVolumeClaim
 }
 
 // GetType returns the type of the artifact storage
@@ -66,7 +67,7 @@ func (p *ArtifactPVC) GetCopyToStorageFromContainerSpec(name, sourcePath, destin
 
 			"-args", strings.Join([]string{"mkdir", "-p", destinationPath}, " "),
 		},
-		VolumeMounts: []corev1.VolumeMount{getPvcMount(p.Name)},
+		VolumeMounts: []corev1.VolumeMount{GetPvcMount(p.Name)},
 	}, {
 		Name:    names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("source-copy-%s", name)),
 		Image:   *BashNoopImage,
@@ -74,11 +75,12 @@ func (p *ArtifactPVC) GetCopyToStorageFromContainerSpec(name, sourcePath, destin
 		Args: []string{
 			"-args", strings.Join([]string{"cp", "-r", fmt.Sprintf("%s/.", sourcePath), destinationPath}, " "),
 		},
-		VolumeMounts: []corev1.VolumeMount{getPvcMount(p.Name)},
+		VolumeMounts: []corev1.VolumeMount{GetPvcMount(p.Name)},
 	}}
 }
 
-func getPvcMount(name string) corev1.VolumeMount {
+// GetPvcMount returns a mounting of the volume with the mount path /pvc
+func GetPvcMount(name string) corev1.VolumeMount {
 	return corev1.VolumeMount{
 		Name:      name,   // taskrun pvc name
 		MountPath: pvcDir, // nothing should be mounted here

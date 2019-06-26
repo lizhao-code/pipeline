@@ -17,8 +17,11 @@ A `TaskRun` runs until all `steps` have completed or until a failure occurs.
   - [Providing resources](#providing-resources)
   - [Overriding where resources are copied from](#overriding-where-resources-are-copied-from)
   - [Service Account](#service-account)
+- [Steps](#steps)
 - [Cancelling a TaskRun](#cancelling-a-taskrun)
 - [Examples](#examples)
+- [Sidecars](#sidecars)
+- [Logs](logs.md)
 
 ---
 
@@ -37,10 +40,6 @@ following fields:
     your `TaskRun` resource object.
     - [`taskRef` or `taskSpec`](#specifying-a-task) - Specifies the details of
       the [`Task`](tasks.md) you want to run
-    - `trigger` - Provides data about what created this `TaskRun`. Can be
-      `manual` if you are creating this manually, or has a value of
-      `PipelineRun` if it is created as part of a
-      [`PipelineRun`](pipelineruns.md)
 - Optional:
 
   - [`serviceAccount`](#service-account) - Specifies a `ServiceAccount` resource
@@ -49,7 +48,8 @@ following fields:
   - [`inputs`] - Specifies [input parameters](#input-parameters) and
     [input resources](#providing-resources)
   - [`outputs`] - Specifies [output resources](#providing-resources)
-  - `timeout` - Specifies timeout after which the `TaskRun` will fail.
+  - `timeout` - Specifies timeout after which the `TaskRun` will fail. Defaults
+    to ten minutes.
   - [`nodeSelector`] - a selector which must be true for the pod to fit on a
     node. The selector which must match a node's labels for the pod to be
     scheduled on that node. More info:
@@ -87,7 +87,11 @@ spec:
           type: git
     steps:
       - name: build-and-push
-        image: gcr.io/kaniko-project/executor
+        image: gcr.io/kaniko-project/executor:v0.9.0
+        # specifying DOCKER_CONFIG is required to allow kaniko to detect docker credential
+        env:
+          - name: "DOCKER_CONFIG"
+            value: "/builder/home/.docker/"
         command:
           - /kaniko/executor
         args:
@@ -227,6 +231,13 @@ spec:
       emptyDir: {}
 ```
 
+## Steps
+
+If multiple `steps` are defined in the `Task` invoked by the `TaskRun`, we will see the
+`status.steps` of the `TaskRun` displayed in the same order as they are defined in
+`spec.steps` of the `Task`, when the `TaskRun` is accessed by the `get` command, e.g.
+`kubectl get taskrun <name> -o yaml`. Replace \<name\> with the name of the `TaskRun`.
+
 ## Cancelling a TaskRun
 
 In order to cancel a running task (`TaskRun`), you need to update its spec to
@@ -263,8 +274,6 @@ metadata:
 spec:
   taskRef:
     name: read-task
-  trigger:
-    type: manual
   inputs:
     resources:
       - name: workspace
@@ -322,8 +331,6 @@ kind: TaskRun
 metadata:
   name: build-push-task-run-2
 spec:
-  trigger:
-    type: manual
   inputs:
     resources:
       - name: workspace
@@ -336,7 +343,11 @@ spec:
           type: git
     steps:
       - name: build-and-push
-        image: gcr.io/kaniko-project/executor
+        image: gcr.io/kaniko-project/executor:v0.9.0
+        # specifying DOCKER_CONFIG is required to allow kaniko to detect docker credential
+        env:
+          - name: "DOCKER_CONFIG"
+            value: "/builder/home/.docker/"
         command:
           - /kaniko/executor
         args:
@@ -356,8 +367,6 @@ metadata:
 spec:
   taskRef:
     name: read-task
-  trigger:
-    type: manual
   inputs:
     resources:
       - name: workspace
@@ -535,6 +544,29 @@ of the `Task` resource object.
 
 For examples and more information about specifying service accounts, see the
 [`ServiceAccount`](./auth.md) reference topic.
+
+## Sidecars
+
+A well-established pattern in Kubernetes is that of the "sidecar" - a
+container which runs alongside your workloads to provide ancillary support.
+Typical examples of the sidecar pattern are logging daemons, services to
+update files on a shared volume, and network proxies.
+
+Tekton doesn't provide a mechanism to specify sidecars for Task steps
+but it's still possible for sidecars to be added to your Pods:
+[Admission Controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/)
+provide cluster admins a mechanism to inject sidecar containers as Pods launch.
+As a concrete example this is one possible method [used by Istio](https://istio.io/docs/setup/kubernetes/additional-setup/sidecar-injection/#automatic-sidecar-injection)
+to inject an envoy proxy in to pods so that they can be included as part of
+Istio's service mesh.
+
+Tekton will happily work with sidecars injected into a TaskRun's
+pods but the behaviour is a bit nuanced: When TaskRun's steps are complete
+any sidecar containers running inside the Pod will be terminated. In
+order to terminate the sidecars they will be restarted with a new
+"nop" image that quickly exits. The result will be that your TaskRun's
+Pod will include the sidecar container with a Retry Count of 1 and
+with a different container image than you might be expecting.
 
 ---
 

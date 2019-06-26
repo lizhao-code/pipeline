@@ -22,15 +22,14 @@
   version = "v0.2.0"
 
 [[projects]]
-  digest = "1:c7ec3a8daf56c9d7c4bb36f498f6db3f8c339b1142300dcd4328950574f91c6f"
+  digest = "1:b6eb7c2538ec2999a072c0e372a18d7b7e3aedac249f26e159586fa5f892909f"
   name = "contrib.go.opencensus.io/exporter/stackdriver"
   packages = [
     ".",
     "monitoredresource",
   ]
   pruneopts = "NUT"
-  revision = "0e2df90c35d1575910dc0a44da7d7b08ae76290f"
-  version = "v0.9.1"
+  revision = "c06c82c832edca4eaf7b0241bd655560a1be0346"
 
 [[projects]]
   digest = "1:40649b512eced276e9d279939b1266b8e18d574db10238bba2d2b6964a3a4faf"
@@ -212,27 +211,29 @@
   revision = "e89373fe6b4a7413d7acd6da1725b83ef713e6e4"
 
 [[projects]]
-  digest = "1:d2754cafcab0d22c13541618a8029a70a8959eb3525ff201fe971637e2274cd0"
+  digest = "1:010d46ea3c1e730897e53058d1013a963f3f987675dda87df64f891b945281db"
   name = "github.com/google/go-cmp"
   packages = [
     "cmp",
     "cmp/cmpopts",
     "cmp/internal/diff",
+    "cmp/internal/flags",
     "cmp/internal/function",
     "cmp/internal/value",
   ]
   pruneopts = "NUT"
-  revision = "3af367b6b30c263d47e8895973edcca9a49cf029"
-  version = "v0.2.0"
+  revision = "6f77996f0c42f7b84e5a2b252227263f93432e9b"
+  version = "v0.3.0"
 
 [[projects]]
-  digest = "1:b70151e9d07b7606ff7f2250e58b6d24e33519e0c27a5aa2d8a912af91021810"
+  digest = "1:4e5cb332228be45d486c2e112e35fe0106dfd8b9fa0da88abc5b6e1f2d918cca"
   name = "github.com/google/go-containerregistry"
   packages = [
     "pkg/authn",
     "pkg/authn/k8schain",
     "pkg/name",
     "pkg/v1",
+    "pkg/v1/layout",
     "pkg/v1/partial",
     "pkg/v1/remote",
     "pkg/v1/remote/transport",
@@ -242,6 +243,22 @@
   ]
   pruneopts = "NUT"
   revision = "8d4083db9aa0d2fae6588c1acdbe6a1f5db461e3"
+
+[[projects]]
+  digest = "1:8d12b0e8334cd6770e9b9b8b48c3340b9739b1469c2f448ced070b589adaa475"
+  name = "github.com/google/go-github"
+  packages = ["github"]
+  pruneopts = "NUT"
+  revision = "901030391ab7f418a984389fd3f8f65e39e5c823"
+  version = "v25.0.4"
+
+[[projects]]
+  digest = "1:a63cff6b5d8b95638bfe300385d93b2a6d9d687734b863da8e09dc834510a690"
+  name = "github.com/google/go-querystring"
+  packages = ["query"]
+  pruneopts = "NUT"
+  revision = "44c6ddd0a2342c386950e880b658017258da92fc"
+  version = "v1.0.0"
 
 [[projects]]
   digest = "1:f9425215dccf1c63f659ec781ca46bc81804341821d0cd8d2459c5b58f8bd067"
@@ -266,6 +283,14 @@
   revision = "e979a0b10eebe748549c702a25e997c556349da6"
 
 [[projects]]
+  digest = "1:ab3ec1fe3e39bac4b3ab63390767766622be35b7cab03f47f787f9ec60522a53"
+  name = "github.com/google/uuid"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "0cd6bf5da1e1c83f8b45653022c74f71af0538a4"
+  version = "v1.1.1"
+
+[[projects]]
   digest = "1:fa300677001e58a995e10afe4e251d2a6e30d3815a234d553b5810db7795d5a2"
   name = "github.com/googleapis/gax-go"
   packages = ["v2"]
@@ -285,6 +310,14 @@
   revision = "0c5108395e2debce0d731cf0287ddf7242066aba"
 
 [[projects]]
+  digest = "1:caf94762c0e0a1bdd44d9307d319f2841939399c86db9f04b4d2e470c51aa007"
+  name = "github.com/gorilla/mux"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "ed099d42384823742bba0bf9a72b53b55c9e2e38"
+  version = "v1.7.2"
+
+[[projects]]
   branch = "master"
   digest = "1:7fdf3223c7372d1ced0b98bf53457c5e89d89aecbad9a77ba9fcc6e01f9e5621"
   name = "github.com/gregjones/httpcache"
@@ -294,6 +327,22 @@
   ]
   pruneopts = "NUT"
   revision = "9cad4c3443a7200dd6400aef47183728de563a38"
+
+[[projects]]
+  digest = "1:f0d9d74edbd40fdeada436d5ac9cb5197407899af3fef85ff0137077ffe8ae19"
+  name = "github.com/hashicorp/errwrap"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "8a6fb523712970c966eefc6b39ed2c5e74880354"
+  version = "v1.0.0"
+
+[[projects]]
+  digest = "1:2ed138049ab373f696db2081ca48f15c5abdf20893803612a284f2bdce2bf443"
+  name = "github.com/hashicorp/go-multierror"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "886a7fbe3eb1c874d46f623bfa70af45f425b3d1"
+  version = "v1.0.0"
 
 [[projects]]
   digest = "1:475b179287e8afdcd352014b2c2500e67decdf63e66125e2129286873453e1cd"
@@ -349,7 +398,7 @@
   revision = "3fc06fd3c9880a9ebb5c401f4b20cf6666cc7bc0"
 
 [[projects]]
-  digest = "1:6a799504a074152e42ff00c6540e5960a920123fd4f57c3e4638f8fab72189e5"
+  digest = "1:284d19f7f7cc781b18146ccd634271d3c328b828a061330f00625023d985a554"
   name = "github.com/knative/pkg"
   packages = [
     "apis",
@@ -385,17 +434,14 @@
     "webhook",
   ]
   pruneopts = "NUT"
-  revision = "28cfa161499b88cc5a71cfb7cf8a59fc34bff3d3"
+  revision = "68737b1b4e03d9a888e89ee2a44714a56eefd539"
 
 [[projects]]
   branch = "master"
-  digest = "1:596dbca2d6004d1a8e779891d5513a01d851948f710d82081574ad3e80636664"
+  digest = "1:dabd27a263906435d198a5fa9237ff2b14383a1e29964b7006e6dc975134f5e6"
   name = "github.com/knative/test-infra"
-  packages = [
-    "scripts",
-    "tools/dep-collector",
-  ]
-  pruneopts = "UT"
+  packages = ["tools/dep-collector"]
+  pruneopts = "NUT"
   revision = "8c8ba71c83aa5ec7928c32fa6e4d9c07d18141b0"
 
 [[projects]]
@@ -445,6 +491,14 @@
   pruneopts = "NUT"
   revision = "4b7aa43c6742a2c18fdef89dd197aaae7dac7ccd"
   version = "1.0.1"
+
+[[projects]]
+  branch = "master"
+  digest = "1:048215a208d3f928e14cad3906c2aad4dc8412a81780f9a5260eaf7998c92df6"
+  name = "github.com/mohae/deepcopy"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "c48cc78d482608239f6c4c92a4abd87eb8761c90"
 
 [[projects]]
   branch = "master"
@@ -543,6 +597,14 @@
   pruneopts = "NUT"
   revision = "298182f68c66c05229eb03ac171abe6e309ee79a"
   version = "v1.0.3"
+
+[[projects]]
+  branch = "master"
+  digest = "1:5558ceef0c045f9c8a0c08c6e0de89bb0895b1aad69d9722b3748f003564b8cb"
+  name = "github.com/tektoncd/plumbing"
+  packages = ["scripts"]
+  pruneopts = "UT"
+  revision = "373083123d6a795a29afd25b4b8f3efc4b7d14bc"
 
 [[projects]]
   digest = "1:e65b395598ef96d96c1df34e3fd3ec4dabe629edb1511de33a59efd9931df0e8"
@@ -701,6 +763,17 @@
   ]
   pruneopts = "NUT"
   revision = "66487607e2081c7c2af2281c62c14ee000d5024b"
+
+[[projects]]
+  branch = "master"
+  digest = "1:e3ebabeeb2580fc1e003cda75abd6993a9f6b38219c9b8b84ec336b473aaa2cf"
+  name = "golang.org/x/xerrors"
+  packages = [
+    ".",
+    "internal",
+  ]
+  pruneopts = "NUT"
+  revision = "1f06c39b43733b74392b1972507822714ced3242"
 
 [[projects]]
   branch = "master"
@@ -1185,9 +1258,13 @@
     "github.com/google/go-containerregistry/pkg/authn/k8schain",
     "github.com/google/go-containerregistry/pkg/name",
     "github.com/google/go-containerregistry/pkg/v1",
+    "github.com/google/go-containerregistry/pkg/v1/layout",
     "github.com/google/go-containerregistry/pkg/v1/partial",
     "github.com/google/go-containerregistry/pkg/v1/remote",
     "github.com/google/go-containerregistry/pkg/v1/types",
+    "github.com/google/go-github/github",
+    "github.com/gorilla/mux",
+    "github.com/hashicorp/go-multierror",
     "github.com/hashicorp/golang-lru",
     "github.com/knative/caching/pkg/apis/caching",
     "github.com/knative/caching/pkg/client/clientset/versioned",
@@ -1204,12 +1281,16 @@
     "github.com/knative/pkg/test/logging",
     "github.com/knative/pkg/tracker",
     "github.com/knative/pkg/webhook",
-    "github.com/knative/test-infra/scripts",
     "github.com/knative/test-infra/tools/dep-collector",
     "github.com/mitchellh/go-homedir",
+    "github.com/mohae/deepcopy",
+    "github.com/tektoncd/plumbing/scripts",
     "go.opencensus.io/trace",
     "go.uber.org/zap",
+    "go.uber.org/zap/zaptest",
     "go.uber.org/zap/zaptest/observer",
+    "golang.org/x/oauth2",
+    "golang.org/x/xerrors",
     "k8s.io/api/core/v1",
     "k8s.io/api/rbac/v1beta1",
     "k8s.io/apimachinery/pkg/api/equality",

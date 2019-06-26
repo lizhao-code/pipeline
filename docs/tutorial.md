@@ -50,8 +50,6 @@ metadata:
 spec:
   taskRef:
     name: echo-hello-world
-  trigger:
-    type: manual
 ```
 
 To apply the yaml files use the following command:
@@ -86,8 +84,6 @@ spec:
   taskRef:
     name: echo-hello-world
   taskSpec: null
-  trigger:
-    type: manual
 status:
   conditions:
     - lastTransitionTime: 2018-12-11T15:50:09Z
@@ -118,10 +114,9 @@ In more common scenarios, a Task needs multiple steps with input and output
 resources to process. For example a Task could fetch source code from a GitHub
 repository and build a Docker image from it.
 
-[`PipelinesResources`](resources.md) are used to define the artifacts that can
-be passed in and out of a task. There are a few system defined resource types
-ready to use, and the following are two examples of the resources commonly
-needed.
+[`PipelineResources`](resources.md) are used to define the artifacts that can be
+passed in and out of a task. There are a few system defined resource types ready
+to use, and the following are two examples of the resources commonly needed.
 
 The [`git` resource](resources.md#git-resource) represents a git repository with
 a specific revision:
@@ -185,7 +180,11 @@ spec:
         type: image
   steps:
     - name: build-and-push
-      image: gcr.io/kaniko-project/executor
+      image: gcr.io/kaniko-project/executor:v0.9.0
+      # specifying DOCKER_CONFIG is required to allow kaniko to detect docker credential
+      env:
+        - name: "DOCKER_CONFIG"
+          value: "/builder/home/.docker/"
       command:
         - /kaniko/executor
       args:
@@ -206,8 +205,6 @@ metadata:
 spec:
   taskRef:
     name: build-docker-image-from-git-source
-  trigger:
-    type: manual
   inputs:
     resources:
       - name: docker-source
@@ -294,8 +291,6 @@ spec:
   taskRef:
     name: build-docker-image-from-git-source
   taskSpec: null
-  trigger:
-    type: manual
 status:
   conditions:
     - lastTransitionTime: 2018-12-11T18:15:09Z
@@ -434,8 +429,6 @@ metadata:
 spec:
   pipelineRef:
     name: tutorial-pipeline
-  trigger:
-    type: manual
   resources:
     - name: source-repo
       resourceRef:
@@ -489,8 +482,6 @@ spec:
       resourceRef:
         name: skaffold-image-leeroy-web
   serviceAccount: ""
-  trigger:
-    type: manual
 status:
   conditions:
     - lastTransitionTime: 2018-12-11T20:32:41Z
@@ -592,6 +583,7 @@ Tekton Pipelines is known to work with:
 
 - Logs can remain in-memory only as opposed to sent to a service such as
   [Stackdriver](https://cloud.google.com/logging/).
+- See [docs on getting logs from Runs](logs.md)
 
 Elasticsearch, Beats and Kibana can be deployed locally as a means to view logs:
 an example is provided at

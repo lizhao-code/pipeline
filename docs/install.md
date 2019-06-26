@@ -4,7 +4,8 @@ Use this page to add the component to an existing Kubernetes cluster.
 
 ## Pre-requisites
 
-1. A Kubernetes cluster (_if you don't have an existing cluster_):
+1. A Kubernetes cluster version 1.11 or later (_if you don't have an existing
+   cluster_):
 
    ```bash
    # Example cluster creation command on GKE
@@ -59,7 +60,7 @@ You are now ready to create and run Tekton Pipelines:
 - Look at the
   [examples](https://github.com/tektoncd/pipeline/tree/master/examples)
 
-### Installing Tekton Pipelines on OpenShift
+### Installing Tekton Pipelines on OpenShift/MiniShift
 
 The `tekton-pipelines-controller` service account needs the `anyuid` security
 context constraint in order to run the webhook pod.
@@ -69,9 +70,10 @@ _See
 for more information_
 
 1. First, login as a user with `cluster-admin` privileges. The following example
-   uses the default `system:admin` user:
+   uses the default `system:admin` user (`admin:admin` for MiniShift):
 
    ```bash
+   # For MiniShift: oc login -u admin:admin
    oc login -u system:admin
    ```
 
@@ -103,9 +105,13 @@ Pipelines need a way to share resources between tasks. The alternatives are a
 [Persistent volume](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 or a [GCS storage bucket](https://cloud.google.com/storage/)
 
-The PVC option does not require any configuration, but the GCS storage bucket
-can be configured using a ConfigMap with the name `config-artifact-bucket` with
-the following attributes:
+The PVC option can be configured using a ConfigMap with the name
+`config-artifact-pvc` and the following attributes:
+
+- size: the size of the volume (5Gi by default)
+
+The GCS storage bucket can be configured using a ConfigMap with the name
+`config-artifact-bucket` with the following attributes:
 
 - location: the address of the bucket (for example gs://mybucket)
 - bucket.service.account.secret.name: the name of the secret that will contain

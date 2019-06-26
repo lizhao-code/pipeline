@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"golang.org/x/xerrors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -40,20 +41,10 @@ var (
 	resourceQuantityCmp = cmp.Comparer(func(x, y resource.Quantity) bool {
 		return x.Cmp(y) == 0
 	})
-	nopContainer = corev1.Container{
-		Name:    "nop",
-		Image:   *nopImage,
-		Command: []string{"/builder/tools/entrypoint"},
-		Args:    []string{"-wait_file", "/builder/tools/0", "-post_file", "/builder/tools/1", "-entrypoint", "/ko-app/nop", "--"},
-		VolumeMounts: []corev1.VolumeMount{{
-			Name:      entrypoint.MountName,
-			MountPath: entrypoint.MountPoint,
-		}},
-	}
 )
 
 func TestTryGetPod(t *testing.T) {
-	err := fmt.Errorf("something went wrong")
+	err := xerrors.New("something went wrong")
 	for _, c := range []struct {
 		desc    string
 		trs     v1alpha1.TaskRunStatus
@@ -116,19 +107,6 @@ func TestTryGetPod(t *testing.T) {
 
 func TestMakePod(t *testing.T) {
 	names.TestingSeed()
-	subPath := "subpath"
-	implicitVolumeMountsWithSubPath := []corev1.VolumeMount{}
-	for _, vm := range implicitVolumeMounts {
-		if vm.Name == "workspace" {
-			implicitVolumeMountsWithSubPath = append(implicitVolumeMountsWithSubPath, corev1.VolumeMount{
-				Name:      vm.Name,
-				MountPath: vm.MountPath,
-				SubPath:   subPath,
-			})
-		} else {
-			implicitVolumeMountsWithSubPath = append(implicitVolumeMountsWithSubPath, vm)
-		}
-	}
 
 	implicitVolumeMountsWithSecrets := append(implicitVolumeMounts, corev1.VolumeMount{
 		Name:      "secret-volume-multi-creds-9l9zj",
@@ -172,7 +150,7 @@ func TestMakePod(t *testing.T) {
 				WorkingDir:   workspaceDir,
 			}},
 			Containers: []corev1.Container{{
-				Name:         "build-step-name",
+				Name:         "step-name",
 				Image:        "image",
 				Env:          implicitEnvVars,
 				VolumeMounts: implicitVolumeMounts,
@@ -185,7 +163,6 @@ func TestMakePod(t *testing.T) {
 					},
 				},
 			},
-				nopContainer,
 			},
 			Volumes: implicitVolumes,
 		},
@@ -218,7 +195,7 @@ func TestMakePod(t *testing.T) {
 				WorkingDir:   workspaceDir,
 			}},
 			Containers: []corev1.Container{{
-				Name:         "build-step-name",
+				Name:         "step-name",
 				Image:        "image",
 				Env:          implicitEnvVars,
 				VolumeMounts: implicitVolumeMounts,
@@ -231,7 +208,6 @@ func TestMakePod(t *testing.T) {
 					},
 				},
 			},
-				nopContainer,
 			},
 			Volumes: implicitVolumesWithSecrets,
 		},
@@ -239,7 +215,7 @@ func TestMakePod(t *testing.T) {
 		desc: "very-long-step-name",
 		ts: v1alpha1.TaskSpec{
 			Steps: []corev1.Container{{
-				Name:  "a-very-long-character-step-name-to-trigger-max-len----and-invalid-characters",
+				Name:  "a-very-very-long-character-step-name-to-trigger-max-len----and-invalid-characters",
 				Image: "image",
 			}},
 		},
@@ -258,7 +234,7 @@ func TestMakePod(t *testing.T) {
 				WorkingDir:   workspaceDir,
 			}},
 			Containers: []corev1.Container{{
-				Name:         "build-step-a-very-long-character-step-name-to-trigger-max-len",
+				Name:         "step-a-very-very-long-character-step-name-to-trigger-max-len",
 				Image:        "image",
 				Env:          implicitEnvVars,
 				VolumeMounts: implicitVolumeMounts,
@@ -271,7 +247,6 @@ func TestMakePod(t *testing.T) {
 					},
 				},
 			},
-				nopContainer,
 			},
 			Volumes: implicitVolumes,
 		},
@@ -298,7 +273,7 @@ func TestMakePod(t *testing.T) {
 				WorkingDir:   workspaceDir,
 			}},
 			Containers: []corev1.Container{{
-				Name:         "build-step-ends-with-invalid",
+				Name:         "step-ends-with-invalid",
 				Image:        "image",
 				Env:          implicitEnvVars,
 				VolumeMounts: implicitVolumeMounts,
@@ -311,7 +286,6 @@ func TestMakePod(t *testing.T) {
 					},
 				},
 			},
-				nopContainer,
 			},
 			Volumes: implicitVolumes,
 		},
@@ -344,7 +318,7 @@ func TestMakePod(t *testing.T) {
 				WorkingDir:   workspaceDir,
 			}},
 			Containers: []corev1.Container{{
-				Name:         "build-step-name",
+				Name:         "step-name",
 				Image:        "image",
 				Env:          implicitEnvVars,
 				VolumeMounts: implicitVolumeMounts,
@@ -357,7 +331,6 @@ func TestMakePod(t *testing.T) {
 					},
 				},
 			},
-				nopContainer,
 			},
 			Volumes: implicitVolumes,
 		},
@@ -409,7 +382,7 @@ func TestMakePod(t *testing.T) {
 				t.Errorf("Diff spec:\n%s", d)
 			}
 
-			wantAnnotations := map[string]string{"sidecar.istio.io/inject": "false"}
+			wantAnnotations := map[string]string{ReadyAnnotation: ""}
 			if c.bAnnotations != nil {
 				for key, val := range c.bAnnotations {
 					wantAnnotations[key] = val
@@ -443,6 +416,96 @@ func TestMakeWorkingDirScript(t *testing.T) {
 		t.Run(c.desc, func(t *testing.T) {
 			if script := makeWorkingDirScript(c.workingDirs); script != c.want {
 				t.Errorf("Expected `%v`, got `%v`", c.want, script)
+			}
+		})
+	}
+}
+
+func TestAddReadyAnnotation(t *testing.T) {
+	type testcase struct {
+		desc       string
+		pod        *corev1.Pod
+		updateFunc UpdatePod
+	}
+	for _, c := range []testcase{{
+		desc:       "missing ready annotation is added to provided pod",
+		pod:        &corev1.Pod{},
+		updateFunc: func(p *corev1.Pod) (*corev1.Pod, error) { return p, nil },
+	}} {
+		t.Run(c.desc, func(t *testing.T) {
+			err := AddReadyAnnotation(c.pod, c.updateFunc)
+			if err != nil {
+				t.Errorf("error received: %v", err)
+			}
+			if v := c.pod.ObjectMeta.Annotations[ReadyAnnotation]; v != readyAnnotationValue {
+				t.Errorf("Annotation %q=%q missing from Pod", ReadyAnnotation, readyAnnotationValue)
+			}
+		})
+	}
+}
+
+func TestAddReadyAnnotationUpdateError(t *testing.T) {
+	type testcase struct {
+		desc       string
+		pod        *corev1.Pod
+		updateFunc UpdatePod
+	}
+	testerror := xerrors.New("error updating pod")
+	for _, c := range []testcase{{
+		desc:       "errors experienced during update are returned",
+		pod:        &corev1.Pod{},
+		updateFunc: func(p *corev1.Pod) (*corev1.Pod, error) { return p, testerror },
+	}} {
+		t.Run(c.desc, func(t *testing.T) {
+			err := AddReadyAnnotation(c.pod, c.updateFunc)
+			if err != testerror {
+				t.Errorf("expected %v received %v", testerror, err)
+			}
+		})
+	}
+}
+
+func TestMakeAnnotations(t *testing.T) {
+	type testcase struct {
+		desc                     string
+		taskRun                  *v1alpha1.TaskRun
+		expectedAnnotationSubset map[string]string
+	}
+	for _, c := range []testcase{
+		{
+			desc: "a taskruns annotations are copied to the pod",
+			taskRun: &v1alpha1.TaskRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "a-taskrun",
+					Annotations: map[string]string{
+						"foo": "bar",
+						"baz": "quux",
+					},
+				},
+			},
+			expectedAnnotationSubset: map[string]string{
+				"foo": "bar",
+				"baz": "quux",
+			},
+		},
+		{
+			desc:    "initial pod annotations contain the ReadyAnnotation to pause steps until sidecars are ready",
+			taskRun: &v1alpha1.TaskRun{},
+			expectedAnnotationSubset: map[string]string{
+				ReadyAnnotation: "",
+			},
+		},
+	} {
+		t.Run(c.desc, func(t *testing.T) {
+			annos := makeAnnotations(c.taskRun)
+			for k, v := range c.expectedAnnotationSubset {
+				receivedValue, ok := annos[k]
+				if !ok {
+					t.Errorf("expected annotation %q was missing", k)
+				}
+				if receivedValue != v {
+					t.Errorf("expected annotation %q=%q, received %q=%q", k, v, k, receivedValue)
+				}
 			}
 		})
 	}

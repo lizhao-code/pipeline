@@ -17,10 +17,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	v1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
-	fakeclientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
-	informers "github.com/tektoncd/pipeline/pkg/client/informers/externalversions"
-	listers "github.com/tektoncd/pipeline/pkg/client/listers/pipeline/v1alpha1"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/logging"
 	"github.com/tektoncd/pipeline/test/names"
 	"go.uber.org/zap"
@@ -30,8 +27,8 @@ import (
 )
 
 var (
-	pipelineResourceLister listers.PipelineResourceLister
-	logger                 *zap.SugaredLogger
+	inputResourceInterfaces map[string]v1alpha1.PipelineResourceInterface
+	logger                  *zap.SugaredLogger
 
 	gitInputs = &v1alpha1.Inputs{
 		Resources: []v1alpha1.TaskResource{{
@@ -63,12 +60,8 @@ var (
 	}
 )
 
-func setUp() {
+func setUp(t *testing.T) {
 	logger, _ = logging.NewLogger("", "")
-	fakeClient := fakeclientset.NewSimpleClientset()
-	sharedInfomer := informers.NewSharedInformerFactory(fakeClient, 0)
-	pipelineResourceInformer := sharedInfomer.Tekton().V1alpha1().PipelineResources()
-	pipelineResourceLister = pipelineResourceInformer.Lister()
 
 	rs := []*v1alpha1.PipelineResource{{
 		ObjectMeta: metav1.ObjectMeta{
@@ -194,8 +187,10 @@ func setUp() {
 			}},
 		},
 	}}
+	inputResourceInterfaces = make(map[string]v1alpha1.PipelineResourceInterface)
 	for _, r := range rs {
-		pipelineResourceInformer.Informer().GetIndexer().Add(r)
+		ri, _ := v1alpha1.ResourceFromType(r)
+		inputResourceInterfaces[r.Name] = ri
 	}
 }
 
@@ -304,7 +299,7 @@ func TestAddResourceToTask(t *testing.T) {
 			}},
 		},
 	}, {
-		desc: "same git input resource for task with diff resource name",
+		desc: "reuse git input resource and verify order",
 		task: taskWithMultipleGitSources,
 		taskRun: &v1alpha1.TaskRun{
 			ObjectMeta: metav1.ObjectMeta{
@@ -334,16 +329,16 @@ func TestAddResourceToTask(t *testing.T) {
 		want: &v1alpha1.TaskSpec{
 			Inputs: multipleGitInputs,
 			Steps: []corev1.Container{{
-				Name:       "git-source-the-git-with-branch-mz4c7",
-				Image:      "override-with-git:latest",
-				Command:    []string{"/ko-app/git-init"},
-				Args:       []string{"-url", "https://github.com/grafeas/kritis", "-revision", "branch", "-path", "/workspace/git-duplicate-space"},
-				WorkingDir: "/workspace",
-			}, {
 				Name:       "git-source-the-git-with-branch-9l9zj",
 				Image:      "override-with-git:latest",
 				Command:    []string{"/ko-app/git-init"},
 				Args:       []string{"-url", "https://github.com/grafeas/kritis", "-revision", "branch", "-path", "/workspace/gitspace"},
+				WorkingDir: "/workspace",
+			}, {
+				Name:       "git-source-the-git-with-branch-mz4c7",
+				Image:      "override-with-git:latest",
+				Command:    []string{"/ko-app/git-init"},
+				Args:       []string{"-url", "https://github.com/grafeas/kritis", "-revision", "branch", "-path", "/workspace/git-duplicate-space"},
 				WorkingDir: "/workspace",
 			}},
 		},
@@ -694,10 +689,10 @@ func TestAddResourceToTask(t *testing.T) {
 		},
 	}} {
 		t.Run(c.desc, func(t *testing.T) {
-			setUp()
+			setUp(t)
 			names.TestingSeed()
 			fakekubeclient := fakek8s.NewSimpleClientset()
-			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, pipelineResourceLister, logger)
+			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, mockResolveTaskResources(c.taskRun), logger)
 			if (err != nil) != c.wantErr {
 				t.Errorf("Test: %q; AddInputResource() error = %v, WantErr %v", c.desc, err, c.wantErr)
 			}
@@ -745,38 +740,6 @@ func TestStorageInputResource(t *testing.T) {
 				Inputs: v1alpha1.TaskRunInputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
 						Name: "gcs-input-resource",
-					}},
-				},
-			},
-		},
-		wantErr: true,
-	}, {
-		desc: "inputs with both resource spec and resource ref",
-		task: &v1alpha1.Task{
-			Spec: v1alpha1.TaskSpec{
-				Inputs: &v1alpha1.Inputs{
-					Resources: []v1alpha1.TaskResource{{
-						Name: "gcs-input-resource",
-						Type: "storage",
-					}},
-				},
-			},
-		},
-		taskRun: &v1alpha1.TaskRun{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "get-storage-run",
-				Namespace: "marshmallow",
-			},
-			Spec: v1alpha1.TaskRunSpec{
-				Inputs: v1alpha1.TaskRunInputs{
-					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "gcs-input-resource",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "storage-gcs-keys",
-						},
-						ResourceSpec: &v1alpha1.PipelineResourceSpec{
-							Type: v1alpha1.PipelineResourceTypeStorage,
-						},
 					}},
 				},
 			},
@@ -901,9 +864,9 @@ func TestStorageInputResource(t *testing.T) {
 	}} {
 		t.Run(c.desc, func(t *testing.T) {
 			names.TestingSeed()
-			setUp()
+			setUp(t)
 			fakekubeclient := fakek8s.NewSimpleClientset()
-			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, pipelineResourceLister, logger)
+			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, mockResolveTaskResources(c.taskRun), logger)
 			if (err != nil) != c.wantErr {
 				t.Errorf("Test: %q; AddInputResource() error = %v, WantErr %v", c.desc, err, c.wantErr)
 			}
@@ -1017,7 +980,7 @@ func TestAddStepsToTaskWithBucketFromConfigMap(t *testing.T) {
 		},
 	}} {
 		t.Run(c.desc, func(t *testing.T) {
-			setUp()
+			setUp(t)
 			fakekubeclient := fakek8s.NewSimpleClientset(
 				&corev1.ConfigMap{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1029,7 +992,7 @@ func TestAddStepsToTaskWithBucketFromConfigMap(t *testing.T) {
 					},
 				},
 			)
-			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, pipelineResourceLister, logger)
+			got, err := AddInputResource(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, mockResolveTaskResources(c.taskRun), logger)
 			if err != nil {
 				t.Errorf("Test: %q; AddInputResource() error = %v", c.desc, err)
 			}
@@ -1038,4 +1001,26 @@ func TestAddStepsToTaskWithBucketFromConfigMap(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mockResolveTaskResources(taskRun *v1alpha1.TaskRun) map[string]v1alpha1.PipelineResourceInterface {
+	resolved := make(map[string]v1alpha1.PipelineResourceInterface)
+	for _, r := range taskRun.Spec.Inputs.Resources {
+		var i v1alpha1.PipelineResourceInterface
+		if name := r.ResourceRef.Name; name != "" {
+			i = inputResourceInterfaces[name]
+			resolved[r.Name] = i
+		} else if r.ResourceSpec != nil {
+			i, _ = v1alpha1.ResourceFromType(&v1alpha1.PipelineResource{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: r.Name,
+				},
+				Spec: *r.ResourceSpec,
+			})
+			resolved[r.Name] = i
+		} else {
+			resolved[r.Name] = nil
+		}
+	}
+	return resolved
 }
